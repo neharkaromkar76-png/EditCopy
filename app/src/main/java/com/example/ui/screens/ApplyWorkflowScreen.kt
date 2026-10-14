@@ -1,10 +1,13 @@
 package com.example.ui.screens
 
+import android.content.Intent
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,16 +30,21 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -46,31 +54,35 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import com.example.data.model.ClipSlot
 import com.example.data.model.SourceVideoMeta
 import com.example.data.model.VideoTemplate
 import com.example.data.repository.TemplateRepository
+import com.example.data.util.ExportState
+import com.example.data.util.VideoExportManager
 import com.example.ui.components.FeatureBadge
 import com.example.ui.components.GlassCard
 import com.example.ui.components.NeonButton
 import com.example.ui.components.NeonOutlinedButton
+import com.example.ui.components.RealVideoPlayerView
 import com.example.ui.components.TimelineMiniPreview
 import com.example.ui.theme.AmberWarning
 import com.example.ui.theme.CardBorderSubtle
@@ -82,12 +94,13 @@ import com.example.ui.theme.ElectricMagenta
 import com.example.ui.theme.GlassBorder
 import com.example.ui.theme.NeonGreen
 import com.example.ui.theme.NeonViolet
+import com.example.ui.theme.RedError
 import com.example.ui.theme.SurfaceNavy
 import com.example.ui.theme.SurfaceNavyElevated
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun ApplyWorkflowScreen(
@@ -99,6 +112,10 @@ fun ApplyWorkflowScreen(
     onComplete: (VideoTemplate) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val exportManager = remember { VideoExportManager(context) }
+
     var currentStep by remember { mutableIntStateOf(if (initialVideo != null) 3 else 1) }
     var selectedTemplate by remember { mutableStateOf(initialTemplate) }
     var selectedVideo by remember { mutableStateOf(initialVideo ?: repository.getSampleSourceVideos().first()) }
@@ -112,36 +129,18 @@ fun ApplyWorkflowScreen(
         }
     }
 
-    var isPreviewPlaying by remember { mutableStateOf(false) }
-    var previewProgress by remember { mutableFloatStateOf(0f) }
-    var exportStatusMessage by remember { mutableStateOf<String?>(null) }
-    var isExporting by remember { mutableStateOf(false) }
+    var exportState by remember { mutableStateOf<ExportState>(ExportState.Idle) }
 
     BackHandler {
-        if (currentStep > 1) {
+        if (exportState is ExportState.Exporting) {
+            exportManager.cancelExport()
+            exportState = ExportState.Idle
+        } else if (currentStep > 1) {
             currentStep--
         } else {
             onBack()
         }
     }
-
-    // Preview playback loop
-    LaunchedEffect(isPreviewPlaying) {
-        if (isPreviewPlaying) {
-            while (isPreviewPlaying) {
-                if (previewProgress >= 1f) previewProgress = 0f
-                delay(80)
-                previewProgress = (previewProgress + 0.02f).coerceAtMost(1f)
-                if (previewProgress >= 1f) isPreviewPlaying = false
-            }
-        }
-    }
-
-    val animatedProgress by animateFloatAsState(
-        targetValue = previewProgress,
-        animationSpec = tween(durationMillis = 60, easing = LinearEasing),
-        label = "anim_progress"
-    )
 
     Box(
         modifier = modifier
@@ -156,7 +155,14 @@ fun ApplyWorkflowScreen(
             WorkflowHeader(
                 currentStep = currentStep,
                 onBack = {
-                    if (currentStep > 1) currentStep-- else onBack()
+                    if (exportState is ExportState.Exporting) {
+                        exportManager.cancelExport()
+                        exportState = ExportState.Idle
+                    } else if (currentStep > 1) {
+                        currentStep--
+                    } else {
+                        onBack()
+                    }
                 }
             )
 
@@ -185,18 +191,26 @@ fun ApplyWorkflowScreen(
                     4 -> Step4PreviewResult(
                         template = selectedTemplate,
                         video = selectedVideo,
-                        isPlaying = isPreviewPlaying,
-                        progress = animatedProgress,
-                        onTogglePlay = { isPreviewPlaying = !isPreviewPlaying }
+                        slotTrims = slotTrimMap
                     )
                     5 -> Step5ExportPackage(
                         template = selectedTemplate,
                         video = selectedVideo,
-                        isExporting = isExporting,
-                        statusMessage = exportStatusMessage,
+                        exportState = exportState,
                         onTriggerExport = {
-                            isExporting = true
-                            exportStatusMessage = "Compiling Non-Destructive EDL & Keyframe Map..."
+                            coroutineScope.launch {
+                                exportManager.exportVideo(
+                                    template = selectedTemplate,
+                                    sourceVideo = selectedVideo,
+                                    slotTrims = slotTrimMap
+                                ) { state ->
+                                    exportState = state
+                                }
+                            }
+                        },
+                        onCancelExport = {
+                            exportManager.cancelExport()
+                            exportState = ExportState.Idle
                         },
                         onFinish = { onComplete(selectedTemplate) }
                     )
@@ -401,7 +415,55 @@ private fun Step2SelectVideo(
     selectedVideo: SourceVideoMeta,
     onSelectVideo: (SourceVideoMeta) -> Unit
 ) {
+    val context = LocalContext.current
     val sampleVideos = remember { repository.getSampleSourceVideos() }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (ignored: Exception) {}
+
+            var durationSec = 15.0f
+            var resolutionStr = "1080 x 1920 (9:16)"
+            var width = 1080
+            var height = 1920
+            try {
+                val retriever = MediaMetadataRetriever()
+                retriever.setDataSource(context, uri)
+                val d = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                if (d != null) durationSec = d.toFloat() / 1000f
+                val w = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                val h = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                if (w != null && h != null) {
+                    width = w.toInt()
+                    height = h.toInt()
+                    val ratio = if (width < height) "9:16" else "16:9"
+                    resolutionStr = "$width x $height ($ratio)"
+                }
+                retriever.release()
+            } catch (ignored: Exception) {}
+
+            val pickedName = uri.lastPathSegment?.substringAfterLast('/') ?: "Picked_Footage.mp4"
+            val pickedMeta = SourceVideoMeta(
+                id = uri.toString(),
+                name = pickedName,
+                uriString = uri.toString(),
+                durationSeconds = durationSec,
+                resolution = resolutionStr,
+                aspectRatio = if (width < height) "9:16" else "16:9",
+                fileSizeBytes = 25_000_000,
+                fps = 60,
+                isSample = false
+            )
+            onSelectVideo(pickedMeta)
+        }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -409,8 +471,120 @@ private fun Step2SelectVideo(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
+            // Pick from Device Gallery Card
+            GlassCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        photoPickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+                        )
+                    }
+                    .testTag("pick_device_video_card"),
+                shapeRadius = 14.dp,
+                borderGlowColor = ElectricCyan,
+                backgroundColor = SurfaceNavyElevated
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(ElectricCyan.copy(alpha = 0.2f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.AddPhotoAlternate,
+                            contentDescription = "Pick custom video",
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Select from Device Gallery",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp
+                        )
+                        Text(
+                            text = "Choose your own real video via Android Photo Picker",
+                            color = TextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+        }
+
+        if (!selectedVideo.isSample) {
+            item {
+                Text(
+                    text = "Selected User Video:",
+                    color = ElectricCyan,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                GlassCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    shapeRadius = 14.dp,
+                    borderGlowColor = ElectricCyan,
+                    backgroundColor = SurfaceNavyElevated
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Icon(
+                                imageVector = Icons.Filled.Movie,
+                                contentDescription = null,
+                                tint = ElectricCyan,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = selectedVideo.name,
+                                    color = TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
+                                Text(
+                                    text = "${selectedVideo.resolution} • ${String.format("%.1f", selectedVideo.durationSeconds)}s",
+                                    color = TextSecondary,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(ElectricCyan),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(imageVector = Icons.Filled.Check, contentDescription = null, tint = DeepBlack, modifier = Modifier.size(18.dp))
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Select source footage to cut and keyframe automatically:",
+                text = "Or Choose a Studio Sample Video:",
                 color = TextSecondary,
                 fontSize = 13.sp
             )
@@ -575,121 +749,101 @@ private fun Step3MatchSlots(
 private fun Step4PreviewResult(
     template: VideoTemplate,
     video: SourceVideoMeta,
-    isPlaying: Boolean,
-    progress: Float,
-    onTogglePlay: () -> Unit
+    slotTrims: Map<Int, Float> = emptyMap()
 ) {
-    Column(
+    LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = "Synchronized Video Preview",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary
-            )
-            Text(
-                text = "Simulating cuts, keyframe speed ramps, and audio pacing",
-                fontSize = 12.sp,
-                color = TextSecondary
+        item {
+            Column {
+                Text(
+                    text = "Live Synchronized Video Preview",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+                Text(
+                    text = "AndroidX Media3 ExoPlayer playback mapped to '${template.title}'",
+                    fontSize = 12.sp,
+                    color = TextSecondary
+                )
+            }
+        }
+
+        item {
+            RealVideoPlayerView(
+                sourceVideo = video,
+                height = 290.dp,
+                clipTitle = "${video.name} • ${template.title}",
+                autoPlay = true,
+                modifier = Modifier.testTag("step4_real_video_player")
             )
         }
 
-        // Preview Canvas Monitor
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(280.dp)
-                .clip(RoundedCornerShape(20.dp)),
-            color = SurfaceNavy,
-            border = BorderStroke(1.5.dp, GlassBorder)
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.radialGradient(
-                            listOf(
-                                ElectricCyan.copy(alpha = 0.2f),
-                                DeepBlack
-                            )
-                        )
-                    )
+        item {
+            // Template Pacing Breakdown Card
+            GlassCard(
+                modifier = Modifier.fillMaxWidth(),
+                shapeRadius = 14.dp,
+                backgroundColor = SurfaceNavy
             ) {
-                // Monitor center graphic
-                Column(
-                    modifier = Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(60.dp)
-                            .clip(CircleShape)
-                            .background(ElectricCyan.copy(alpha = 0.3f))
-                            .clickable(onClick = onTogglePlay),
-                        contentAlignment = Alignment.Center
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                            contentDescription = "Toggle",
-                            tint = ElectricCyan,
-                            modifier = Modifier.size(32.dp)
+                        Text(
+                            text = "Target Template Rhythm",
+                            color = ElectricCyan,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            text = "${template.clipSlots.size.coerceAtLeast(template.cutsCount)} Cut Slots • ${String.format("%.1f", template.durationSeconds)}s",
+                            color = TextSecondary,
+                            fontSize = 12.sp
                         )
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    Text(
-                        text = if (isPlaying) "Playing: ${template.title}" else "Tap to Play Synchronized Cuts",
-                        color = TextPrimary,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium
+                    TimelineMiniPreview(
+                        cutsCount = template.cutsCount,
+                        keyframesCount = template.keyframesCount,
+                        durationSeconds = template.durationSeconds,
+                        modifier = Modifier.height(24.dp)
                     )
-                }
 
-                // Timecode
-                val curTime = template.durationSeconds * progress
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = DeepBlack.copy(alpha = 0.8f),
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(12.dp)
-                ) {
-                    Text(
-                        text = "${String.format("00:%04.1f", curTime)} / ${String.format("00:%04.1f", template.durationSeconds)}",
-                        color = ElectricCyan,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    template.clipSlots.take(4).forEach { slot ->
+                        val trim = slotTrims[slot.slotIndex] ?: 0f
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 3.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Slot ${slot.slotIndex}: ${slot.label}",
+                                color = TextPrimary,
+                                fontSize = 12.sp
+                            )
+                            Text(
+                                text = "${String.format("%.1f", slot.durationSeconds)}s (${slot.transitionIn ?: "Cut"})${if (trim > 0f) " +${String.format("%.1f", trim)}s" else ""}",
+                                color = NeonViolet,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
                 }
             }
-        }
-
-        // Progress bar
-        Column(modifier = Modifier.fillMaxWidth()) {
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(3.dp)),
-                color = ElectricCyan,
-                trackColor = SurfaceNavyElevated
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            TimelineMiniPreview(
-                cutsCount = template.cutsCount,
-                keyframesCount = template.keyframesCount,
-                durationSeconds = template.durationSeconds,
-                modifier = Modifier.height(24.dp)
-            )
         }
     }
 }
@@ -698,107 +852,340 @@ private fun Step4PreviewResult(
 private fun Step5ExportPackage(
     template: VideoTemplate,
     video: SourceVideoMeta,
-    isExporting: Boolean,
-    statusMessage: String?,
+    exportState: ExportState,
     onTriggerExport: () -> Unit,
+    onCancelExport: () -> Unit,
     onFinish: () -> Unit
 ) {
-    var hasExported by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    var isPlayingExported by remember { mutableStateOf(false) }
 
-    LaunchedEffect(isExporting) {
-        if (isExporting) {
-            delay(1500)
-            hasExported = true
+    if (isPlayingExported && exportState is ExportState.Success) {
+        Dialog(onDismissRequest = { isPlayingExported = false }) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = DeepBlack,
+                border = BorderStroke(1.5.dp, GlassBorder),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Exported Video Player",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
+                        )
+                        IconButton(onClick = { isPlayingExported = false }) {
+                            Icon(imageVector = Icons.Filled.Close, contentDescription = "Close", tint = TextSecondary)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    RealVideoPlayerView(
+                        sourceVideo = null,
+                        directUri = exportState.outputUri,
+                        height = 280.dp,
+                        clipTitle = exportState.galleryPath.substringAfterLast('/'),
+                        autoPlay = true
+                    )
+                }
+            }
         }
     }
 
-    Column(
+    LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(20.dp),
+            .padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Surface(
-            modifier = Modifier.size(80.dp),
-            shape = CircleShape,
-            color = if (hasExported) NeonGreen.copy(alpha = 0.2f) else ElectricCyan.copy(alpha = 0.2f)
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = if (hasExported) Icons.Filled.CheckCircle else Icons.Filled.Download,
-                    contentDescription = null,
-                    tint = if (hasExported) NeonGreen else ElectricCyan,
-                    modifier = Modifier.size(40.dp)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        Text(
-            text = if (hasExported) "Template Applied & Compiled!" else "Compile Editing Blueprint",
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold,
-            color = TextPrimary
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            text = if (hasExported)
-                "The EDL sequence has been compiled. All ${template.cutsCount} cuts and keyframe coordinates are mapped to ${video.name}."
-            else
-                "Export a non-destructive EditCopy project package (.ecproj) containing the complete transfer recipe.",
-            fontSize = 13.sp,
-            color = TextSecondary,
-            lineHeight = 18.sp,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Honest Engine Notice
-        GlassCard(
-            modifier = Modifier.fillMaxWidth(),
-            shapeRadius = 14.dp,
-            borderGlowColor = AmberWarning.copy(alpha = 0.4f),
-            backgroundColor = SurfaceNavy
-        ) {
-            Column(modifier = Modifier.padding(14.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(imageVector = Icons.Filled.Warning, contentDescription = null, tint = AmberWarning, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Engine Notice", color = AmberWarning, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        when (exportState) {
+            is ExportState.Idle -> {
+                item {
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Surface(
+                        modifier = Modifier.size(80.dp),
+                        shape = CircleShape,
+                        color = ElectricCyan.copy(alpha = 0.2f)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Filled.Download,
+                                contentDescription = null,
+                                tint = ElectricCyan,
+                                modifier = Modifier.size(40.dp)
+                            )
+                        }
+                    }
                 }
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "EditCopy outputs non-destructive metadata bundles (.ecproj / .json). Video re-encoding requires hardware encoder integration, which will be coupled in the upcoming native rendering pipeline.",
-                    color = TextSecondary,
-                    fontSize = 11.sp,
-                    lineHeight = 15.sp
-                )
+
+                item {
+                    Text(
+                        text = "Export Video to Gallery",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Apply '${template.title}' cut timing to '${video.name}' and render an MP4 video directly into your device Gallery.",
+                        fontSize = 13.sp,
+                        color = TextSecondary,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+
+                item {
+                    GlassCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        shapeRadius = 14.dp,
+                        backgroundColor = SurfaceNavy
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text("Export Specifications", color = ElectricCyan, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            DetailRow("Target Duration", "${String.format("%.1f", template.durationSeconds)}s")
+                            DetailRow("Cuts to Apply", "${template.clipSlots.size.coerceAtLeast(template.cutsCount)} cuts")
+                            DetailRow("Resolution", video.resolution)
+                            DetailRow("Gallery Location", "Movies/EditCopy")
+                        }
+                    }
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    NeonButton(
+                        text = "Export Video & Save to Gallery",
+                        onClick = onTriggerExport,
+                        modifier = Modifier.fillMaxWidth(),
+                        testTag = "trigger_export_button"
+                    )
+                }
+            }
+
+            is ExportState.Exporting -> {
+                item {
+                    Spacer(modifier = Modifier.height(30.dp))
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(60.dp),
+                        color = ElectricCyan,
+                        strokeWidth = 4.dp
+                    )
+                }
+
+                item {
+                    Text(
+                        text = "${exportState.progressPercent}%",
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = ElectricCyan
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = exportState.message,
+                        fontSize = 14.sp,
+                        color = TextPrimary,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+
+                item {
+                    LinearProgressIndicator(
+                        progress = { exportState.progressPercent / 100f },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .testTag("export_progress_bar"),
+                        color = ElectricCyan,
+                        trackColor = SurfaceNavyElevated
+                    )
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    NeonOutlinedButton(
+                        text = "Cancel Export",
+                        onClick = onCancelExport,
+                        accentColor = RedError,
+                        modifier = Modifier.fillMaxWidth(),
+                        testTag = "cancel_export_button"
+                    )
+                }
+            }
+
+            is ExportState.Error -> {
+                item {
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Surface(
+                        modifier = Modifier.size(80.dp),
+                        shape = CircleShape,
+                        color = RedError.copy(alpha = 0.2f)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Filled.ErrorOutline,
+                                contentDescription = null,
+                                tint = RedError,
+                                modifier = Modifier.size(40.dp)
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    Text(
+                        text = "Export Failed",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = RedError
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = exportState.errorMessage,
+                        fontSize = 13.sp,
+                        color = TextPrimary,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    if (exportState.details.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = exportState.details.take(200),
+                            fontSize = 11.sp,
+                            color = TextSecondary,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    NeonButton(
+                        text = "Retry Export",
+                        onClick = onTriggerExport,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+
+            is ExportState.Success -> {
+                item {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Surface(
+                        modifier = Modifier.size(80.dp),
+                        shape = CircleShape,
+                        color = NeonGreen.copy(alpha = 0.2f)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Filled.CheckCircle,
+                                contentDescription = null,
+                                tint = NeonGreen,
+                                modifier = Modifier.size(44.dp)
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    Text(
+                        text = "Video Exported & Saved to Gallery!",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "The MP4 video was generated and registered with Android MediaStore.",
+                        fontSize = 13.sp,
+                        color = TextSecondary,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+
+                item {
+                    GlassCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        shapeRadius = 14.dp,
+                        backgroundColor = SurfaceNavy,
+                        borderGlowColor = NeonGreen.copy(alpha = 0.3f)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text("Verified Render Output", color = NeonGreen, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            DetailRow("Saved Location", exportState.galleryPath)
+                            DetailRow("Duration", "${String.format("%.1f", exportState.durationSeconds)}s")
+                            DetailRow("Resolution", exportState.resolution)
+                            DetailRow("File Size", "${String.format("%.2f", exportState.fileSizeBytes / (1024f * 1024f))} MB")
+                            DetailRow("Cuts Applied", "${exportState.cutsApplied} cuts synchronized")
+                        }
+                    }
+                }
+
+                item {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        NeonButton(
+                            text = "Play Exported Video",
+                            icon = Icons.Filled.PlayArrow,
+                            onClick = { isPlayingExported = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            testTag = "play_exported_video_button"
+                        )
+
+                        NeonOutlinedButton(
+                            text = "Share Video",
+                            icon = Icons.Filled.Share,
+                            onClick = {
+                                try {
+                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "video/mp4"
+                                        putExtra(Intent.EXTRA_STREAM, exportState.outputUri)
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    context.startActivity(Intent.createChooser(shareIntent, "Share Exported Video"))
+                                } catch (e: Exception) {
+                                    android.util.Log.e("ApplyWorkflow", "Share error: ${e.message}")
+                                }
+                            },
+                            accentColor = ElectricCyan,
+                            modifier = Modifier.fillMaxWidth(),
+                            testTag = "share_exported_video_button"
+                        )
+
+                        NeonButton(
+                            text = "Finish & Return to Library",
+                            onClick = onFinish,
+                            modifier = Modifier.fillMaxWidth(),
+                            testTag = "finish_workflow_button"
+                        )
+                    }
+                }
             }
         }
+    }
+}
 
-        Spacer(modifier = Modifier.height(28.dp))
-
-        if (!hasExported) {
-            NeonButton(
-                text = if (isExporting) "Compiling Blueprint..." else "Compile & Save Package",
-                onClick = onTriggerExport,
-                enabled = !isExporting,
-                modifier = Modifier.fillMaxWidth(),
-                testTag = "trigger_export_button"
-            )
-        } else {
-            NeonButton(
-                text = "Finish & Return to Library",
-                onClick = onFinish,
-                modifier = Modifier.fillMaxWidth(),
-                testTag = "finish_workflow_button"
-            )
-        }
+@Composable
+private fun DetailRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(text = label, color = TextSecondary, fontSize = 12.sp)
+        Text(text = value, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
     }
 }
 

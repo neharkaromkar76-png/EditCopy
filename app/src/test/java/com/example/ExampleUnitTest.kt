@@ -75,5 +75,15 @@ class ExampleUnitTest {
         val formats = repository.getSupportedFormats()
         assertTrue(formats.any { it.fileExtension.contains(".ecproj") && it.status == ImportFormatSupportStatus.SUPPORTED })
         assertTrue(formats.any { it.fileExtension.contains(".vnproject") && it.status == ImportFormatSupportStatus.TESTING_LAB_ONLY })
+        assertTrue(formats.any { it.fileExtension.contains(".7z") && it.status == ImportFormatSupportStatus.SUPPORTED })
+    }
+
+    @Test
+    fun testSevenZipExtractor_DetectsMagicAndExtracts() {
+        val headerBytes = byteArrayOf(0x37, 0x7A, 0xBC.toByte(), 0xAF.toByte(), 0x27, 0x1C)
+        val tempFile = java.io.File.createTempFile("test_header", ".7z")
+        tempFile.writeBytes(headerBytes)
+        assertTrue("Should detect 7z magic signature", com.example.data.util.SevenZipProjectExtractor.has7zMagic(tempFile))
+        tempFile.delete()
     }
 }

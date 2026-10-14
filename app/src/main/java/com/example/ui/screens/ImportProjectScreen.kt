@@ -92,14 +92,25 @@ fun ImportProjectScreen(
     var analysisResult by remember { mutableStateOf<ImportAnalysisResult?>(null) }
     var isAnalyzing by remember { mutableStateOf(false) }
 
+    val context = androidx.compose.ui.platform.LocalContext.current
+
     val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
+        contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            val fileName = uri.lastPathSegment ?: "imported_project.ecproj"
+            val fileName = com.example.data.util.SevenZipProjectExtractor.getFileName(context, uri)
             isAnalyzing = true
-            // Run analysis
-            val result = repository.analyzeProjectImport(fileName)
+            val result = if (fileName.endsWith(".7z", ignoreCase = true) || fileName.endsWith(".zip", ignoreCase = true)) {
+                com.example.data.util.SevenZipProjectExtractor.extractAndAnalyze(context, uri, fileName)
+            } else {
+                // If it might be 7z without standard extension or another project file
+                val res = com.example.data.util.SevenZipProjectExtractor.extractAndAnalyze(context, uri, fileName)
+                if (res.isCompatible || res.statusBadge.contains("7z", ignoreCase = true) || res.statusBadge.contains("Extracted", ignoreCase = true)) {
+                    res
+                } else {
+                    repository.analyzeProjectImport(fileName)
+                }
+            }
             analysisResult = result
             isAnalyzing = false
         }
@@ -161,7 +172,7 @@ fun ImportProjectScreen(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(20.dp))
                             .clickable {
-                                filePickerLauncher.launch("*/*")
+                                filePickerLauncher.launch(arrayOf("*/*"))
                             }
                             .testTag("import_file_dropzone"),
                         color = SurfaceNavy,
@@ -202,7 +213,7 @@ fun ImportProjectScreen(
                             Spacer(modifier = Modifier.height(6.dp))
 
                             Text(
-                                text = "Tap to open system file picker (.ecproj, .otio, .xml, .vnproject)",
+                                text = "Tap to open system file picker (.7z archives, .ecproj, .otio, .vnproject)",
                                 fontSize = 12.sp,
                                 color = TextSecondary
                             )
@@ -210,8 +221,8 @@ fun ImportProjectScreen(
                             Spacer(modifier = Modifier.height(18.dp))
 
                             NeonButton(
-                                text = "Browse Files",
-                                onClick = { filePickerLauncher.launch("*/*") },
+                                text = "Browse Files (.7z & Projects)",
+                                onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
                                 icon = Icons.Filled.FileDownload,
                                 testTag = "browse_files_button"
                             )
@@ -239,6 +250,16 @@ fun ImportProjectScreen(
                         .padding(horizontal = 20.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    SampleFileButton(
+                        fileName = "Cyber_BeatSync_Sample.7z",
+                        formatType = "7-Zip Archive (Apache Commons Compress)",
+                        isVerified = true,
+                        onClick = {
+                            val sample7z = com.example.data.util.SevenZipProjectExtractor.createSample7zArchive(context)
+                            analysisResult = com.example.data.util.SevenZipProjectExtractor.extractFromFile(context, sample7z, "Cyber_BeatSync_Sample.7z")
+                        }
+                    )
+
                     SampleFileButton(
                         fileName = "Cyber_Velocity_Preset.ecproj",
                         formatType = "Native EditCopy JSON",
