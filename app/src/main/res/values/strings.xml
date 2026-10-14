@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">EditCopy</string>
+    <string name="tagline">Edit Once · Copy Forever</string>
+    <string name="create_next_edit">Create Your Next Edit</string>
+    <string name="create_template">Create Template</string>
+    <string name="apply_template">Apply Template</string>
+    <string name="import_project">Import Project</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_templates">Templates</string>
+    <string name="nav_create">Create</string>
+    <string name="nav_library">Library</string>
+    <string name="nav_profile">Profile</string>
+</resources>

@@ -1,0 +1,6 @@
+{
+  "name": "EditCopy",
+  "description": "Edit Once · Copy Forever. Professional video editing template architecture to save, reuse, and transfer cuts, keyframes, transitions, and audio timing across videos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
