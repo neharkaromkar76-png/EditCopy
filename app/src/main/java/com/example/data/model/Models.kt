@@ -87,7 +87,8 @@ data class ImportAnalysisResult(
     val extractedKeyframes: Int = 0,
     val extractedAudioBeats: Int = 0,
     val rawDetails: String = "",
-    val suggestedTemplate: VideoTemplate? = null
+    val suggestedTemplate: VideoTemplate? = null,
+    val fileSizeBytes: Long = 0L
 )
 
 sealed class AppScreen {

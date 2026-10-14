@@ -76,7 +76,7 @@ object SevenZipProjectExtractor {
     /**
      * Safely extracts and analyzes a .7z archive from a content URI or File.
      */
-    fun extractAndAnalyze(context: Context, uri: Uri, fileName: String): ImportAnalysisResult {
+    fun extractAndAnalyze(context: Context, uri: Uri, fileName: String, fileSizeBytes: Long = 0L): ImportAnalysisResult {
         // Step 1: Copy stream to a temporary file in app-private storage so SevenZFile can read random access
         val temp7zFile = File(context.cacheDir, "temp_import_${UUID.randomUUID()}.7z")
         try {
@@ -90,7 +90,8 @@ object SevenZipProjectExtractor {
                 isCompatible = false,
                 statusBadge = "Failed to Read File",
                 summaryNotice = "Could not open input stream from file picker URI: $uri",
-                rawDetails = "Error: ContentResolver returned null InputStream"
+                rawDetails = "Error: ContentResolver returned null InputStream",
+                fileSizeBytes = fileSizeBytes
             )
 
             // Step 2: Validate 7z magic signature
@@ -101,11 +102,12 @@ object SevenZipProjectExtractor {
                     isCompatible = false,
                     statusBadge = "Not a 7z Archive",
                     summaryNotice = "The selected file does not contain a valid 7-Zip signature header (37 7A BC AF 27 1C). Please select a genuine .7z archive.",
-                    rawDetails = "Header check failed: expected 7z magic bytes 37 7A BC AF 27 1C"
+                    rawDetails = "Header check failed: expected 7z magic bytes 37 7A BC AF 27 1C",
+                    fileSizeBytes = fileSizeBytes
                 )
             }
 
-            return extractFromFile(context, temp7zFile, fileName)
+            return extractFromFile(context, temp7zFile, fileName, fileSizeBytes)
         } catch (e: Exception) {
             Log.e(TAG, "Error reading 7z archive from URI: ${e.message}", e)
             return ImportAnalysisResult(
@@ -114,7 +116,8 @@ object SevenZipProjectExtractor {
                 isCompatible = false,
                 statusBadge = "Extraction Error",
                 summaryNotice = "Failed to access archive: ${e.localizedMessage ?: e.message}",
-                rawDetails = e.stackTraceToString()
+                rawDetails = e.stackTraceToString(),
+                fileSizeBytes = fileSizeBytes
             )
         } finally {
             if (temp7zFile.exists()) {
@@ -123,7 +126,7 @@ object SevenZipProjectExtractor {
         }
     }
 
-    fun extractFromFile(context: Context, archiveFile: File, originalName: String): ImportAnalysisResult {
+    fun extractFromFile(context: Context, archiveFile: File, originalName: String, fileSizeBytes: Long = 0L): ImportAnalysisResult {
         val destDir = File(context.cacheDir, "7z_extracted_${System.currentTimeMillis()}")
         if (!destDir.exists()) destDir.mkdirs()
 
@@ -141,7 +144,8 @@ object SevenZipProjectExtractor {
                     isCompatible = false,
                     statusBadge = "Invalid Archive",
                     summaryNotice = "The provided file is empty or too small to be a valid 7-Zip archive.",
-                    rawDetails = "File size: ${archiveFile.length()} bytes"
+                    rawDetails = "File size: ${archiveFile.length()} bytes",
+                    fileSizeBytes = fileSizeBytes
                 )
             }
 
@@ -500,6 +504,86 @@ object SevenZipProjectExtractor {
         } finally {
             outArchive.close()
         }
+        return sampleFile
+    }
+
+    /**
+     * Creates a genuine sample .zip archive in app cache for immediate test verification.
+     */
+    fun createSampleZipArchive(context: Context): File {
+        val sampleFile = File(context.cacheDir, "Cyber_Project_Package.zip")
+        if (sampleFile.exists() && sampleFile.length() > 500) {
+            return sampleFile
+        }
+
+        java.util.zip.ZipOutputStream(sampleFile.outputStream().buffered()).use { zos ->
+            val jsonContent = """
+                {
+                    "schema": "editcopy_blueprint_v1",
+                    "title": "Cyber Velocity Zip Master",
+                    "cutsCount": 16,
+                    "keyframesCount": 10,
+                    "durationSeconds": 14.8,
+                    "bpm": 128
+                }
+            """.trimIndent().toByteArray(Charsets.UTF_8)
+            val jsonEntry = java.util.zip.ZipEntry("project_blueprint.json")
+            zos.putNextEntry(jsonEntry)
+            zos.write(jsonContent)
+            zos.closeEntry()
+
+            val readmeContent = "EditCopy ZIP Project Package with verified cuts and timeline slots.".toByteArray(Charsets.UTF_8)
+            val readmeEntry = java.util.zip.ZipEntry("README.txt")
+            zos.putNextEntry(readmeEntry)
+            zos.write(readmeContent)
+            zos.closeEntry()
+        }
+        return sampleFile
+    }
+
+    /**
+     * Creates a genuine sample .vnproject SQLite file in app cache.
+     */
+    fun createSampleVnProject(context: Context): File {
+        val sampleFile = File(context.cacheDir, "Dance_BeatDrop_Edit.vnproject")
+        if (sampleFile.exists() && sampleFile.length() > 100) {
+            return sampleFile
+        }
+        val sqliteHeader = "SQLite format 3\u0000".toByteArray(Charsets.ISO_8859_1)
+        val dummyPayload = ByteArray(1024) { 0 }
+        sampleFile.writeBytes(sqliteHeader + dummyPayload)
+        return sampleFile
+    }
+
+    /**
+     * Creates a sample Premiere / FCP XML sequence file.
+     */
+    fun createSampleXmlProject(context: Context): File {
+        val sampleFile = File(context.cacheDir, "Premiere_Cut_Sequence.xml")
+        if (sampleFile.exists() && sampleFile.length() > 100) {
+            return sampleFile
+        }
+        val xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <xmeml version="4">
+                <sequence>
+                    <name>Cyberpunk_Night_Reel</name>
+                    <duration>420</duration>
+                    <rate><timebase>30</timebase></rate>
+                    <media>
+                        <video>
+                            <track>
+                                <clipitem id="clip-1"><name>Intro Hook</name><duration>60</duration></clipitem>
+                                <clipitem id="clip-2"><name>Speed Ramp</name><duration>90</duration></clipitem>
+                                <clipitem id="clip-3"><name>Action Climax</name><duration>120</duration></clipitem>
+                                <clipitem id="clip-4"><name>Outro Hold</name><duration>150</duration></clipitem>
+                            </track>
+                        </video>
+                    </media>
+                </sequence>
+            </xmeml>
+        """.trimIndent()
+        sampleFile.writeText(xml)
         return sampleFile
     }
 }
